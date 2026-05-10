@@ -474,18 +474,23 @@ class DiagramService:
             # Architecture, Class, Data Flow: ground-truth structure from AST,
             # LLM only writes node descriptions.
             data = self._build_static_graph(repo, diagram_type)
+            enriched_ok = True  # LLM-built path: success implied by non-empty data
             if not data or not data.get("nodes"):
                 # Fallback to LLM if static analysis yields nothing
                 # (e.g. non-Python repo with no AST data)
                 data = self._build_diagram_from_llm(repo, diagram_type, chunks)
             else:
-                data = self._enrich_nodes(repo, diagram_type, data, chunks)
+                data, enriched_ok = self._enrich_nodes(repo, diagram_type, data, chunks)
 
         if not data:
             return {"error": "Could not generate diagram. Try regenerating."}
 
         self._cache[cache_key] = data
-        self._save_diagram(repo, diagram_type, data, model=self._gen.current_model())
+        # Only label the save with the active model if the LLM step actually
+        # succeeded. On enrichment failure, save with model=None so the
+        # protection rule can replace this degraded artifact later.
+        save_model = self._gen.current_model() if enriched_ok else None
+        self._save_diagram(repo, diagram_type, data, model=save_model)
         return {"diagram": data, "type": diagram_type}
 
     def build_tour(self, repo: str) -> dict:
@@ -689,6 +694,7 @@ class DiagramService:
             return
 
         yield {"stage": "building", "progress": 0.40, "message": "Building graph from AST…"}
+        enriched_ok = True
         if diagram_type == "sequence":
             data = self._build_sequence_from_llm(repo, chunks)
         else:
@@ -700,7 +706,7 @@ class DiagramService:
             else:
                 yield {"stage": "enriching", "progress": 0.70,
                        "message": "Enriching node descriptions with AI…"}
-                data = self._enrich_nodes(repo, diagram_type, data, chunks)
+                data, enriched_ok = self._enrich_nodes(repo, diagram_type, data, chunks)
 
         if not data:
             yield {"stage": "error", "progress": 1.0,
@@ -708,7 +714,11 @@ class DiagramService:
             return
 
         self._cache[cache_key] = data
-        self._save_diagram(repo, diagram_type, data, model=self._gen.current_model())
+        # See build_diagram() for rationale: skip premium label if the LLM
+        # enrichment call silently failed, otherwise the protection rule
+        # treats a structurally-only-correct diagram as premium-quality.
+        save_model = self._gen.current_model() if enriched_ok else None
+        self._save_diagram(repo, diagram_type, data, model=save_model)
         yield {"stage": "done", "progress": 1.0, "diagram": data, "type": diagram_type}
 
     def invalidate(self, repo: str):
@@ -1022,7 +1032,7 @@ class DiagramService:
 
         return {"nodes": nodes, "edges": edges}
 
-    def _enrich_nodes(self, repo: str, diagram_type: str, graph: dict, chunks: list[dict] | None = None) -> dict:
+    def _enrich_nodes(self, repo: str, diagram_type: str, graph: dict, chunks: list[dict] | None = None) -> tuple[dict, bool]:
         """
         Ask the LLM to write a short description for each node.
 
@@ -1034,12 +1044,17 @@ class DiagramService:
         snippets per node. Without this, the LLM only sees the node name and file
         and has to guess what the component does — the most common source of
         inaccurate descriptions. With snippets, descriptions are grounded in real code.
+
+        Returns (graph, enriched_ok). enriched_ok=False means the LLM call failed
+        and descriptions are missing; callers should not label the save with the
+        configured premium model in that case (otherwise the protection rule trusts
+        a degraded artifact as if it were premium-quality).
         """
         import json as _json
 
         nodes = graph.get("nodes", [])
         if not nodes:
-            return graph
+            return graph, True
 
         # Two lookups so we can attach real code for both diagram types:
         #
@@ -1116,11 +1131,12 @@ class DiagramService:
                     n["description"] = desc
             matched = sum(1 for n in nodes if n.get("description"))
             print(f"DiagramService: enriched {matched}/{len(nodes)} nodes with descriptions")
+            return graph, True
         except Exception as e:
             print(f"DiagramService: enrichment failed (non-fatal): {e}")
-            # Descriptions stay empty — diagram still shows accurate structure
-
-        return graph
+            # Descriptions stay empty — diagram still shows accurate structure,
+            # but signal failure so the save site doesn't tag this as premium.
+            return graph, False
 
     # ── LLM-based builders ────────────────────────────────────────────────────
 

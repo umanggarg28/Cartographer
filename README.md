@@ -11,7 +11,7 @@ pinned: false
 
 **A production-grade RAG system that maps any GitHub repository — built from scratch, without LangChain or LlamaIndex.**
 
-Index any public repo and ask natural-language questions about its code. Cartographer retrieves the exact functions and classes relevant to your question, explains them with source citations, and can autonomously investigate complex questions across multiple files using an agent with 10 specialised tools. It can also generate a full README for any indexed repo on demand.
+Index any public repo and ask natural-language questions about its code. Cartographer retrieves the exact functions and classes relevant to your question, explains them with source citations, and can autonomously investigate complex questions across multiple files using an agent with 12 specialised tools. It can also generate a full README for any indexed repo on demand.
 
 **Live:** [cartographer-app.vercel.app](https://cartographer-app.vercel.app) · **Backend:** [HuggingFace Spaces](https://huggingface.co/spaces/umanggarg/cartographer)
 
@@ -23,7 +23,7 @@ Most RAG tutorials wrap a library and call it done. This project implements ever
 
 - **Ingestion** — GitHub API → AST-based code chunking → contextual LLM descriptions → dual-vector embedding → Qdrant Cloud
 - **Retrieval** — HyDE + query expansion + native hybrid search (dense + BM25) + cross-encoder reranking — each stage independently improving recall and precision
-- **Agent** — a ReAct loop with 10 MCP tools, working memory, parallel tool execution, and streaming thought traces
+- **Agent** — a ReAct loop with 12 MCP tools, working memory, parallel tool execution, and streaming thought traces
 - **UI** — the pipeline is visible: every retrieved chunk, agent thought, tool call, and confidence grade is shown to the user
 
 The result is both a useful tool and a study in how production AI systems are actually built.
@@ -88,6 +88,8 @@ Top-8 reranked chunks are injected as numbered sources. The LLM cites by `[1]`, 
 Cerebras llama-3.3-70b (2600 tok/s, fastest) → Groq → Gemini → OpenRouter → Anthropic
 ```
 
+**Two-tier LLM strategy.** The free cascade above serves all runtime traffic — Q&A, agent mode, diagrams. A second, opt-in **premium tier** uses Claude Sonnet 4.6 to generate cached artifacts (concept tour, diagrams, README, repo_map) once per repo. Outputs are persisted in a `_artifacts` Qdrant collection and survive container restarts, so subsequent visitors get the high-quality artifacts at the free-cascade cost.
+
 ---
 
 ## Agent Mode
@@ -100,7 +102,7 @@ The agent communicates with tools via **MCP** — an open protocol for wiring LL
 
 This means every tool works with any MCP-compatible client, not just our agent.
 
-### 10 Agent Tools
+### 12 Agent Tools
 
 | Tool | What it does |
 |------|-------------|
@@ -109,6 +111,8 @@ This means every tool works with any MCP-compatible client, not just our agent.
 | `read_file` | Read any indexed file in full |
 | `get_file_chunk` | Read a precise line range from a file |
 | `list_files` | List all indexed files in a repo or subdirectory |
+| `glob` | Find files matching a glob pattern across the indexed repo |
+| `grep` | Regex search across indexed file contents |
 | `find_callers` | Find every call site of a function across the repo |
 | `trace_calls` | Walk the call chain from a function to see what it calls and what calls it |
 | `note` | Store a key-value fact in working memory for this session |

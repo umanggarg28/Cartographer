@@ -184,14 +184,20 @@ def bake_one(
     started = time.monotonic()
     if not ingest(repo, store, gen, embedder):
         return False
-    bake_repo_map(repo, repo_map_svc, force)
-    bake_tour(repo, diagram_svc, force)
+    # Each bake step returns False on failure. Track them all so the
+    # final exit code reflects whether the repo is *actually* fully
+    # baked, not just whether ingestion succeeded.
+    failures: list[str] = []
+    if not bake_repo_map(repo, repo_map_svc, force):                 failures.append("repo_map")
+    if not bake_tour(repo, diagram_svc, force):                      failures.append("tour")
     for dtype in DIAGRAM_TYPES:
-        bake_diagram(repo, dtype, diagram_svc, force)
-    bake_readme(repo, readme_svc, store, force)
+        if not bake_diagram(repo, dtype, diagram_svc, force):        failures.append(f"diagram:{dtype}")
+    if not bake_readme(repo, readme_svc, store, force):              failures.append("readme")
     elapsed = time.monotonic() - started
+    if failures:
+        print(f"  ⚠  partial: {len(failures)} step(s) failed → {', '.join(failures)}")
     print(f"  ⏱  {elapsed:.1f}s")
-    return True
+    return not failures
 
 
 def main() -> int:
